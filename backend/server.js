@@ -43,6 +43,49 @@ app.post('/students', async (req, res) => {
   }
 });
 
+app.post('/students/:id/subjects', async (req, res) => {
+  const studentId = req.params.id;
+  const { subjects } = req.body;
+
+  if (!Array.isArray(subjects) || subjects.length === 0) {
+    return res.status(400).json({ error: 'A non-empty list of subjects is required.' });
+  }
+
+  for (const s of subjects) {
+    if (!s.subject_id || !s.proficiency || !s.improvement_priority) {
+      return res.status(400).json({ error: 'Each subject needs subject_id, proficiency, and improvement_priority.' });
+    }
+  }
+
+  try {
+    const studentCheck = await pool.query('SELECT id FROM students WHERE id = $1', [studentId]);
+    if (studentCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Student not found.' });
+    }
+
+    const savedSubjects = [];
+    for (const s of subjects) {
+      const result = await pool.query(
+        `INSERT INTO student_subjects (student_id, subject_id, proficiency, improvement_priority)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (student_id, subject_id)
+         DO UPDATE SET proficiency = $3, improvement_priority = $4
+         RETURNING *`,
+        [studentId, s.subject_id, s.proficiency, s.improvement_priority]
+      );
+      savedSubjects.push(result.rows[0]);
+    }
+
+    res.status(201).json(savedSubjects);
+  } catch (err) {
+    if (err.code === '23514') {
+      return res.status(400).json({ error: 'Invalid proficiency (must be 1-5) or improvement_priority (must be Low/Medium/High).' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong saving subjects.' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server is running at http://localhost:${PORT}`);
 });
