@@ -11,3 +11,21 @@ CREATE TABLE students (
   squad_id INTEGER,
   created_at TIMESTAMP DEFAULT NOW()
 );
+
+
+-- Subjects table: master list of subjects per academic group
+CREATE TABLE subjects (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  academic_group VARCHAR(50) NOT NULL
+);
+
+-- Student subjects: proficiency + improvement priority per student per subject
+CREATE TABLE student_subjects (
+  id SERIAL PRIMARY KEY,
+  student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
+  subject_id INTEGER REFERENCES subjects(id) ON DELETE CASCADE,
+  proficiency INTEGER CHECK (proficiency BETWEEN 1 AND 5),
+  improvement_priority VARCHAR(10) CHECK (improvement_priority IN ('Low', 'Medium', 'High')),
+  UNIQUE(student_id, subject_id)
+);
