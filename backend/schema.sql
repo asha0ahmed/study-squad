@@ -29,3 +29,19 @@ CREATE TABLE student_subjects (
   improvement_priority VARCHAR(10) CHECK (improvement_priority IN ('Low', 'Medium', 'High')),
   UNIQUE(student_id, subject_id)
 );
+
+
+-- Starter subject data
+INSERT INTO subjects (name, academic_group) VALUES
+('Physics', 'Science'),
+('Chemistry', 'Science'),
+('Higher Math', 'Science'),
+('Biology', 'Science'),
+('English', 'Science'),
+('ICT', 'Science'),
+('History', 'Arts'),
+('Economics', 'Arts'),
+('English', 'Arts'),
+('Civics', 'Arts'),
+('Sociology', 'Arts'),
+('Bangla', 'Arts');
