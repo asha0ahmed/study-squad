@@ -9,6 +9,37 @@ const PORT = 3000;
 
 app.use(express.json());
 
+// Task 36: looks up which student covers which subject(s) in a squad.
+// Returns a map like: { 12: ['Physics'], 15: ['Chemistry', 'Biology'] }
+// so it can be merged onto a squad's member list.
+async function getSubjectCoverage(squadId) {
+  const result = await pool.query(
+    `SELECT ssc.student_id, sub.name AS subject_name
+     FROM squad_subject_coverage ssc
+     JOIN subjects sub ON sub.id = ssc.subject_id
+     WHERE ssc.squad_id = $1`,
+    [squadId]
+  );
+
+  const coverageByStudent = {};
+  for (const row of result.rows) {
+    if (!coverageByStudent[row.student_id]) {
+      coverageByStudent[row.student_id] = [];
+    }
+    coverageByStudent[row.student_id].push(row.subject_name);
+  }
+  return coverageByStudent;
+}
+
+// Attaches a "covers" field (array of subject names, or [] if none)
+// onto each member in a members list.
+function attachCoverage(members, coverageByStudent) {
+  return members.map(m => ({
+    ...m,
+    covers: coverageByStudent[m.student_id] || []
+  }));
+}
+
 app.get('/', (req, res) => {
   res.send('Study Squad backend is running!');
 });
@@ -313,13 +344,25 @@ app.post('/students/:id/match', requireAuth, async (req, res) => {
          RETURNING *`,
         [squad.id, m.student_id, slot]
       );
-      members.push({ ...memberResult.rows[0], name: m.name, contributes: m.contributes });
+
+            members.push({ ...memberResult.rows[0], name: m.name, contributes: m.contributes });
       slot++;
 
       await pool.query(
         `UPDATE students SET matching_status = 'suggested' WHERE id = $1`,
         [m.student_id]
       );
+
+      // Save which subject(s) this student covers in this squad, so it
+      // can be shown later (e.g. "Rahim is your Physics mentor").
+      for (const subjectId of m.contributes) {
+        await pool.query(
+          `INSERT INTO squad_subject_coverage (squad_id, student_id, subject_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (squad_id, student_id, subject_id) DO NOTHING`,
+          [squad.id, m.student_id, subjectId]
+        );
+      }
     }
 
     res.status(201).json({ squad, members });
@@ -765,12 +808,15 @@ app.get('/students/:id/squad', requireAuth, async (req, res) => {
       mentor = mentorResult.rows[0] || null;
     }
 
+    const coverageByStudent = await getSubjectCoverage(squadId);
+
     res.json({
       squad,
       myStatus: myMembership.status,
-      members: membersResult.rows,
+      members: attachCoverage(membersResult.rows, coverageByStudent),
       mentor
     });
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong fetching your squad.' });
@@ -802,7 +848,8 @@ app.get('/mentors/my-squads', requireAuth, async (req, res) => {
          ORDER BY sm.slot`,
         [squad.id]
       );
-      squad.members = membersResult.rows;
+      const coverageByStudent = await getSubjectCoverage(squad.id);
+      squad.members = attachCoverage(membersResult.rows, coverageByStudent);
     }
 
     res.json(squads);
@@ -862,7 +909,10 @@ app.get('/squads/:squadId', requireAuth, async (req, res) => {
       mentor = mentorResult.rows[0] || null;
     }
 
-    res.json({ squad, members: membersResult.rows, mentor });
+    const coverageByStudent = await getSubjectCoverage(squadId);
+
+    res.json({ squad, members: attachCoverage(membersResult.rows, coverageByStudent), mentor });
+    
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong fetching squad details.' });

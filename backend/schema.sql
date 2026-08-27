@@ -101,3 +101,16 @@ CREATE TABLE squad_messages (
   message TEXT NOT NULL,
   created_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Task 36: persist which student covers which subject in a squad
+-- (the matching algorithm already figures this out at match-time,
+-- this just saves the decision so it can be displayed later)
+
+CREATE TABLE squad_subject_coverage (
+  id SERIAL PRIMARY KEY,
+  squad_id INTEGER NOT NULL REFERENCES squads(id),
+  student_id INTEGER NOT NULL REFERENCES students(id),
+  subject_id INTEGER NOT NULL REFERENCES subjects(id),
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE (squad_id, student_id, subject_id)
+);
