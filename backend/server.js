@@ -777,6 +777,41 @@ app.get('/students/:id/squad', requireAuth, async (req, res) => {
   }
 });
 
+
+app.get('/mentors/my-squads', requireAuth, async (req, res) => {
+  const mentorId = req.mentor?.mentorId;
+
+  if (!mentorId) {
+    return res.status(403).json({ error: 'Only mentors can view their assigned squads.' });
+  }
+
+  try {
+    const squadsResult = await pool.query(
+      `SELECT * FROM squads WHERE mentor_id = $1 ORDER BY created_at DESC`,
+      [mentorId]
+    );
+
+    const squads = squadsResult.rows;
+
+    for (const squad of squads) {
+      const membersResult = await pool.query(
+        `SELECT sm.slot, sm.student_id, s.name, sm.join_type, sm.status
+         FROM squad_members sm
+         JOIN students s ON s.id = sm.student_id
+         WHERE sm.squad_id = $1
+         ORDER BY sm.slot`,
+        [squad.id]
+      );
+      squad.members = membersResult.rows;
+    }
+
+    res.json(squads);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong fetching your squads.' });
+  }
+});
+
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
