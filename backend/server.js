@@ -341,6 +341,40 @@ app.post('/squads/:squadId/confirm', requireAuth, async (req, res) => {
   }
 });
 
+
+app.post('/squads/:squadId/invite', requireAuth, async (req, res) => {
+  const squadId = parseInt(req.params.squadId);
+  const studentId = req.student.studentId;
+
+  try {
+    const memberCheck = await pool.query(
+      `SELECT status FROM squad_members WHERE squad_id = $1 AND student_id = $2`,
+      [squadId, studentId]
+    );
+
+    if (memberCheck.rows.length === 0) {
+      return res.status(403).json({ error: 'You are not a member of this squad.' });
+    }
+
+    if (memberCheck.rows[0].status !== 'confirmed') {
+      return res.status(403).json({ error: 'Only confirmed members can generate an invite link.' });
+    }
+
+    const squadResult = await pool.query('SELECT invite_code FROM squads WHERE id = $1', [squadId]);
+    let inviteCode = squadResult.rows[0].invite_code;
+
+    if (!inviteCode) {
+      inviteCode = Math.random().toString(36).substring(2, 10);
+      await pool.query('UPDATE squads SET invite_code = $1 WHERE id = $2', [inviteCode, squadId]);
+    }
+
+    res.json({ inviteCode, inviteLink: `yourapp.com/join/${inviteCode}` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong generating the invite link.' });
+  }
+});
+
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
