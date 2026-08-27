@@ -1,7 +1,8 @@
 const express = require('express');
 const pool = require('./db');
 const bcrypt = require('bcrypt');
-  const jwt = require('jsonwebtoken');
+const jwt = require('jsonwebtoken');
+const requireAuth = require('./middleware/auth');
 const app = express();
 const PORT = 3000;
 
@@ -51,8 +52,11 @@ app.post('/students', async (req, res) => {
   }
 });
 
-app.post('/students/:id/subjects', async (req, res) => {
+app.post('/students/:id/subjects', requireAuth, async (req, res) => {
   const studentId = req.params.id;
+     if (parseInt(studentId) !== req.student.studentId) {
+     return res.status(403).json({ error: 'You can only edit your own subjects.' });
+   }
   const { subjects } = req.body;
 
   if (!Array.isArray(subjects) || subjects.length === 0) {
