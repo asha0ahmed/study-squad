@@ -103,6 +103,70 @@ app.post('/mentors', async (req, res) => {
   }
 });
 
+app.patch('/mentors/:mentorId/groups/:groupName/approve', async (req, res) => {
+  const { mentorId, groupName } = req.params;
+
+  try {
+    const result = await pool.query(
+      `UPDATE mentor_groups SET approval_status = 'approved'
+       WHERE mentor_id = $1 AND group_name = $2
+       RETURNING mentor_id, group_name, approval_status`,
+      [mentorId, groupName]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Mentor group request not found.' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong approving the group.' });
+  }
+});
+
+app.post('/mentors/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required.' });
+  }
+
+  try {
+    const result = await pool.query('SELECT * FROM mentors WHERE email = $1', [email]);
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    const mentor = result.rows[0];
+    const passwordMatches = await bcrypt.compare(password, mentor.password_hash);
+
+    if (!passwordMatches) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    const token = jwt.sign(
+      { mentorId: mentor.id, email: mentor.email, role: 'mentor' },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({
+      token,
+      mentor: {
+        id: mentor.id,
+        name: mentor.name,
+        email: mentor.email,
+        institution: mentor.institution,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong logging in.' });
+  }
+});
+
 app.post('/students/:id/subjects', requireAuth, async (req, res) => {
   const studentId = req.params.id;
      if (parseInt(studentId) !== req.student.studentId) {

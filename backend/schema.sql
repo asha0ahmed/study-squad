@@ -54,12 +54,12 @@ CREATE TABLE mentors (
   email VARCHAR(150) UNIQUE NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
   institution VARCHAR(150) NOT NULL,
-  approval_status VARCHAR(20) NOT NULL DEFAULT 'pending',
   created_at TIMESTAMP DEFAULT NOW()
 );
 
 CREATE TABLE mentor_groups (
   mentor_id INTEGER NOT NULL REFERENCES mentors(id),
   group_name VARCHAR(20) NOT NULL,
+  approval_status VARCHAR(20) NOT NULL DEFAULT 'pending',
   UNIQUE (mentor_id, group_name)
 );
