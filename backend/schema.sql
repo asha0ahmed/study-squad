@@ -63,3 +63,25 @@ CREATE TABLE mentor_groups (
   approval_status VARCHAR(20) NOT NULL DEFAULT 'pending',
   UNIQUE (mentor_id, group_name)
 );
+
+-- Task 32a: Squad matching tables
+
+CREATE TABLE squads (
+  id SERIAL PRIMARY KEY,
+  academic_group VARCHAR(20) NOT NULL,
+  year VARCHAR(30) NOT NULL,
+  aspirant_type VARCHAR(30) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'suggested',
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE squad_members (
+  id SERIAL PRIMARY KEY,
+  squad_id INTEGER NOT NULL REFERENCES squads(id),
+  student_id INTEGER NOT NULL UNIQUE REFERENCES students(id),
+  slot INTEGER NOT NULL,
+  join_type VARCHAR(10) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  joined_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE (squad_id, slot)
+);
