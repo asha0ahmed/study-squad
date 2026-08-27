@@ -11,7 +11,11 @@ function requireAuth(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.student = decoded; // attaches { studentId, email } to the request
+    if (decoded.role === 'mentor') {
+      req.mentor = decoded; // attaches { mentorId, email, role } to the request
+    } else {
+      req.student = decoded; // attaches { studentId, email } to the request
+    }
     next();
   } catch (err) {
     return res.status(401).json({ error: 'Invalid or expired token.' });
