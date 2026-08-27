@@ -1,7 +1,7 @@
 // "mentor" per subject (the student strongest in that subject),
 // prioritizing the hardest-to-cover subjects first.
 
-async function findAutoSquad(pool, { year, academic_group, aspirant_type }) {
+async function findAutoSquad(pool, { year, academic_group, aspirant_type, requestingStudentId }) {
   // 1. Get eligible students (same filters, not yet in a squad)
   const studentsResult = await pool.query(
     `SELECT id, name FROM students
@@ -10,6 +10,19 @@ async function findAutoSquad(pool, { year, academic_group, aspirant_type }) {
     [year, academic_group, aspirant_type]
   );
   const eligibleStudents = studentsResult.rows;
+
+  
+  // Make sure the requesting student is included in the pool,
+  // even if their matching_status somehow isn't 'not_started' yet
+  if (requestingStudentId && !eligibleStudents.some(s => s.id === requestingStudentId)) {
+    const selfResult = await pool.query(
+      `SELECT id, name FROM students WHERE id = $1`,
+      [requestingStudentId]
+    );
+    if (selfResult.rows.length > 0) {
+      eligibleStudents.push(selfResult.rows[0]);
+    }
+  }
 
   if (eligibleStudents.length === 0) {
     return [];
@@ -62,6 +75,22 @@ async function findAutoSquad(pool, { year, academic_group, aspirant_type }) {
   // 5. Greedily assign one mentor per subject, scarcest subject first
   const selected = new Map(); // student_id -> student info
   const assignedStudentIds = new Set();
+
+    // Guarantee the requesting student a slot first
+  if (requestingStudentId) {
+    const self = eligibleStudents.find(s => s.id === requestingStudentId);
+    if (self) {
+      assignedStudentIds.add(requestingStudentId);
+      const selfSubjects = proficiencyResult.rows
+        .filter(r => r.student_id === requestingStudentId && r.proficiency >= 4)
+        .map(r => r.subject_id);
+      selected.set(requestingStudentId, {
+        student_id: requestingStudentId,
+        name: self.name,
+        contributes: selfSubjects
+      });
+    }
+  }
 
   for (const { subjectId } of subjectOrder) {
     if (selected.size >= 4) break;
