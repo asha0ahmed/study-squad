@@ -282,6 +282,65 @@ app.post('/students/:id/match', requireAuth, async (req, res) => {
   }
 });
 
+
+app.post('/squads/:squadId/confirm', requireAuth, async (req, res) => {
+  const squadId = parseInt(req.params.squadId);
+  const studentId = req.student.studentId;
+
+  try {
+    const memberCheck = await pool.query(
+      `SELECT * FROM squad_members WHERE squad_id = $1 AND student_id = $2`,
+      [squadId, studentId]
+    );
+
+    if (memberCheck.rows.length === 0) {
+      return res.status(403).json({ error: 'You are not a member of this squad.' });
+    }
+
+    await pool.query(
+      `UPDATE squad_members SET status = 'confirmed' WHERE squad_id = $1 AND student_id = $2`,
+      [squadId, studentId]
+    );
+
+    const confirmedResult = await pool.query(
+      `SELECT student_id FROM squad_members WHERE squad_id = $1 AND status = 'confirmed'`,
+      [squadId]
+    );
+    const confirmedCount = confirmedResult.rows.length;
+
+    const squadResult = await pool.query('SELECT * FROM squads WHERE id = $1', [squadId]);
+    let squad = squadResult.rows[0];
+
+    if (confirmedCount >= 4 && squad.status !== 'locked') {
+      const lockResult = await pool.query(
+        `UPDATE squads SET status = 'locked' WHERE id = $1 RETURNING *`,
+        [squadId]
+      );
+      squad = lockResult.rows[0];
+
+      const confirmedIds = confirmedResult.rows.map(r => r.student_id);
+      await pool.query(
+        `UPDATE students SET matching_status = 'confirmed' WHERE id = ANY($1::int[])`,
+        [confirmedIds]
+      );
+    }
+
+    const membersResult = await pool.query(
+      `SELECT sm.slot, sm.student_id, s.name, sm.join_type, sm.status
+       FROM squad_members sm
+       JOIN students s ON s.id = sm.student_id
+       WHERE sm.squad_id = $1
+       ORDER BY sm.slot`,
+      [squadId]
+    );
+
+    res.json({ squad, members: membersResult.rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong confirming your squad membership.' });
+  }
+});
+
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
