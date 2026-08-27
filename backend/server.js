@@ -52,6 +52,57 @@ app.post('/students', async (req, res) => {
   }
 });
 
+app.post('/mentors', async (req, res) => {
+  const { name, email, password, institution, groups } = req.body;
+
+  if (!name || !email || !password || !institution) {
+    return res.status(400).json({ error: 'Name, email, password, and institution are required.' });
+  }
+
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  }
+
+  if (!Array.isArray(groups) || groups.length === 0) {
+    return res.status(400).json({ error: 'At least one group (Science, Arts, or Commerce) is required.' });
+  }
+
+  const validGroups = ['Science', 'Arts', 'Commerce'];
+  for (const g of groups) {
+    if (!validGroups.includes(g)) {
+      return res.status(400).json({ error: `Invalid group: ${g}. Must be Science, Arts, or Commerce.` });
+    }
+  }
+
+  try {
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const mentorResult = await pool.query(
+      `INSERT INTO mentors (name, email, password_hash, institution)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, name, email, institution, approval_status, created_at`,
+      [name, email, passwordHash, institution]
+    );
+
+    const mentor = mentorResult.rows[0];
+
+    for (const g of groups) {
+      await pool.query(
+        `INSERT INTO mentor_groups (mentor_id, group_name) VALUES ($1, $2)`,
+        [mentor.id, g]
+      );
+    }
+
+    res.status(201).json({ ...mentor, groups });
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'A mentor with this email already exists.' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong saving the mentor.' });
+  }
+});
+
 app.post('/students/:id/subjects', requireAuth, async (req, res) => {
   const studentId = req.params.id;
      if (parseInt(studentId) !== req.student.studentId) {

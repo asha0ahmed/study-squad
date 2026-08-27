@@ -4,6 +4,7 @@ CREATE TABLE students (
   name VARCHAR(100) NOT NULL,
   email VARCHAR(150) UNIQUE NOT NULL,
   password_hash VARCHAR(255),
+  role VARCHAR(20) NOT NULL DEFAULT 'student',
   institution VARCHAR(150),
   year VARCHAR(20),
   academic_group VARCHAR(50),
@@ -46,3 +47,19 @@ INSERT INTO subjects (name, academic_group) VALUES
 ('Civics', 'Arts'),
 ('Sociology', 'Arts'),
 ('Bangla', 'Arts');
+
+CREATE TABLE mentors (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  email VARCHAR(150) UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  institution VARCHAR(150) NOT NULL,
+  approval_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE mentor_groups (
+  mentor_id INTEGER NOT NULL REFERENCES mentors(id),
+  group_name VARCHAR(20) NOT NULL,
+  UNIQUE (mentor_id, group_name)
+);
