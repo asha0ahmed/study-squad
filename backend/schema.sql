@@ -71,6 +71,7 @@ CREATE TABLE squads (
   year VARCHAR(30) NOT NULL,
   aspirant_type VARCHAR(30) NOT NULL,
   status VARCHAR(20) NOT NULL DEFAULT 'suggested',
+  invite_code VARCHAR(20) UNIQUE,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
