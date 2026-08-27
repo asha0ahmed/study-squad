@@ -24,7 +24,7 @@ app.get('/db-test', async (req, res) => {
 });
 
 app.post('/students', async (req, res) => {
-  const { name, email, password, institution, year, academic_group, aspirant_type } = req.body;
+    const { name, email, password, institution, year, academic_group, aspirant_type, inviteCode } = req.body;
 
   if (!name || !email || !password) {
     return res.status(400).json({ error: 'Name, email, and password are required.' });
@@ -43,7 +43,50 @@ app.post('/students', async (req, res) => {
        RETURNING id, name, email, institution, year, academic_group, aspirant_type, matching_status, created_at`,
       [name, email, passwordHash, institution, year, academic_group, aspirant_type]
     );
-    res.status(201).json(result.rows[0]);
+
+    const newStudent = result.rows[0];
+
+    // If an invite code was provided, try to auto-join the squad
+    if (inviteCode) {
+      const squadResult = await pool.query('SELECT * FROM squads WHERE invite_code = $1', [inviteCode]);
+
+      if (squadResult.rows.length > 0) {
+        const squad = squadResult.rows[0];
+
+        const membersResult = await pool.query(
+          'SELECT slot FROM squad_members WHERE squad_id = $1 ORDER BY slot',
+          [squad.id]
+        );
+        const takenSlots = membersResult.rows.map(r => r.slot);
+
+        let nextSlot = null;
+        for (let s = 5; s <= 6; s++) {
+          if (!takenSlots.includes(s)) {
+            nextSlot = s;
+            break;
+          }
+        }
+
+        if (nextSlot !== null) {
+          await pool.query(
+            `INSERT INTO squad_members (squad_id, student_id, slot, join_type, status)
+             VALUES ($1, $2, $3, 'invite', 'pending')`,
+            [squad.id, newStudent.id, nextSlot]
+          );
+
+          await pool.query(
+            `UPDATE students SET matching_status = 'suggested' WHERE id = $1`,
+            [newStudent.id]
+          );
+
+          newStudent.matching_status = 'suggested';
+          newStudent.joinedSquad = squad.id;
+        }
+      }
+    }
+
+    res.status(201).json(newStudent);
+
   } catch (err) {
     if (err.code === '23505') {
       return res.status(409).json({ error: 'A student with this email already exists.' });
