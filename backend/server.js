@@ -485,6 +485,41 @@ app.post('/invites/:inviteCode/join', requireAuth, async (req, res) => {
   }
 });
 
+
+
+app.get('/mentors/available-squads', requireAuth, async (req, res) => {
+  const mentorId = req.mentor?.mentorId;
+
+  if (!mentorId) {
+    return res.status(403).json({ error: 'Only mentors can view available squads.' });
+  }
+
+  try {
+    const approvedGroupsResult = await pool.query(
+      `SELECT group_name FROM mentor_groups WHERE mentor_id = $1 AND approval_status = 'approved'`,
+      [mentorId]
+    );
+
+    const approvedGroups = approvedGroupsResult.rows.map(r => r.group_name);
+
+    if (approvedGroups.length === 0) {
+      return res.json([]);
+    }
+
+    const squadsResult = await pool.query(
+      `SELECT * FROM squads
+       WHERE status = 'locked' AND mentor_id IS NULL
+       AND academic_group = ANY($1::text[])`,
+      [approvedGroups]
+    );
+
+    res.json(squadsResult.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong fetching available squads.' });
+  }
+});
+
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
