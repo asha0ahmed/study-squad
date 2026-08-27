@@ -148,6 +148,10 @@ app.post('/mentors', async (req, res) => {
 });
 
 app.patch('/mentors/:mentorId/groups/:groupName/approve', async (req, res) => {
+  const adminSecret = req.headers['x-admin-secret'];
+  if (!adminSecret || adminSecret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: 'Admin access required.' });
+  }
   const { mentorId, groupName } = req.params;
 
   try {
