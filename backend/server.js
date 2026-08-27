@@ -3,6 +3,7 @@ const pool = require('./db');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const requireAuth = require('./middleware/auth');
+const { findAutoSquad } = require('./utils/matching');
 const app = express();
 const PORT = 3000;
 
@@ -210,6 +211,74 @@ app.post('/students/:id/subjects', requireAuth, async (req, res) => {
     }
     console.error(err);
     res.status(500).json({ error: 'Something went wrong saving subjects.' });
+  }
+});
+
+
+app.post('/students/:id/match', requireAuth, async (req, res) => {
+  const studentId = parseInt(req.params.id);
+
+  if (studentId !== req.student.studentId) {
+    return res.status(403).json({ error: 'You can only run matching for your own account.' });
+  }
+
+  try {
+    const studentResult = await pool.query(
+      'SELECT id, year, academic_group, aspirant_type, matching_status FROM students WHERE id = $1',
+      [studentId]
+    );
+
+    if (studentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Student not found.' });
+    }
+
+    const student = studentResult.rows[0];
+
+    if (student.matching_status !== 'not_started') {
+      return res.status(400).json({ error: 'You are already matched or in progress. Cannot start new matching.' });
+    }
+
+    const matchedStudents = await findAutoSquad(pool, {
+      year: student.year,
+      academic_group: student.academic_group,
+      aspirant_type: student.aspirant_type,
+      requestingStudentId: studentId
+    });
+
+    if (matchedStudents.length === 0) {
+      return res.status(404).json({ error: 'No eligible students found to form a squad right now. Try again later.' });
+    }
+
+    const squadResult = await pool.query(
+      `INSERT INTO squads (academic_group, year, aspirant_type, status)
+       VALUES ($1, $2, $3, 'suggested')
+       RETURNING *`,
+      [student.academic_group, student.year, student.aspirant_type]
+    );
+    const squad = squadResult.rows[0];
+
+    const members = [];
+    let slot = 1;
+    for (const m of matchedStudents) {
+      const memberResult = await pool.query(
+        `INSERT INTO squad_members (squad_id, student_id, slot, join_type, status)
+         VALUES ($1, $2, $3, 'auto', 'pending')
+         RETURNING *`,
+        [squad.id, m.student_id, slot]
+      );
+      members.push({ ...memberResult.rows[0], name: m.name, contributes: m.contributes });
+      slot++;
+
+      await pool.query(
+        `UPDATE students SET matching_status = 'suggested' WHERE id = $1`,
+        [m.student_id]
+      );
+    }
+
+    res.status(201).json({ squad, members });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong running matching.' });
   }
 });
 
