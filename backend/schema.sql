@@ -10,7 +10,6 @@ CREATE TABLE students (
   academic_group VARCHAR(50),
   aspirant_type VARCHAR(50),
   matching_status VARCHAR(20) DEFAULT 'not_started',
-  squad_id INTEGER,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -85,3 +84,7 @@ CREATE TABLE squad_members (
   joined_at TIMESTAMP DEFAULT NOW(),
   UNIQUE (squad_id, slot)
 );
+   -- Note: students.squad_id was removed — squad membership is tracked
+   -- exclusively via squad_members (student_id is UNIQUE there, enforcing
+   -- one active squad per student). matching_status on students still
+   -- tracks funnel state (not_started / suggested / confirmed).
