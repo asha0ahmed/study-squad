@@ -40,6 +40,57 @@ function attachCoverage(members, coverageByStudent) {
   }));
 }
 
+// Task 37: how many hours a squad is allowed to sit at 'suggested'
+// (i.e. never reaching 4 confirmations) before it's cleaned up.
+// Can be overridden via .env for testing, e.g. SQUAD_EXPIRY_HOURS=0.01
+const SQUAD_EXPIRY_HOURS = process.env.SQUAD_EXPIRY_HOURS
+  ? parseFloat(process.env.SQUAD_EXPIRY_HOURS)
+  : 48;
+
+// Finds squads that have been stuck at 'suggested' longer than
+// SQUAD_EXPIRY_HOURS, marks them 'expired', removes their members,
+// and resets those students back to 'not_started' so they can be
+// matched into a new squad. Returns how many squads were expired.
+async function expireStaleSquads() {
+  const staleResult = await pool.query(
+    `SELECT id FROM squads
+     WHERE status = 'suggested'
+       AND created_at < NOW() - ($1 || ' hours')::interval`,
+    [SQUAD_EXPIRY_HOURS]
+  );
+
+  const staleSquadIds = staleResult.rows.map(r => r.id);
+  if (staleSquadIds.length === 0) {
+    return 0;
+  }
+
+  const memberResult = await pool.query(
+    `SELECT student_id FROM squad_members WHERE squad_id = ANY($1::int[])`,
+    [staleSquadIds]
+  );
+  const studentIds = memberResult.rows.map(r => r.student_id);
+
+  await pool.query(
+    `DELETE FROM squad_members WHERE squad_id = ANY($1::int[])`,
+    [staleSquadIds]
+  );
+
+  await pool.query(
+    `UPDATE squads SET status = 'expired' WHERE id = ANY($1::int[])`,
+    [staleSquadIds]
+  );
+
+  if (studentIds.length > 0) {
+    await pool.query(
+      `UPDATE students SET matching_status = 'not_started' WHERE id = ANY($1::int[])`,
+      [studentIds]
+    );
+  }
+
+  console.log(`Expired ${staleSquadIds.length} stale squad(s), freed ${studentIds.length} student(s) to re-match.`);
+  return staleSquadIds.length;
+}
+
 app.get('/', (req, res) => {
   res.send('Study Squad backend is running!');
 });
@@ -301,6 +352,10 @@ app.post('/students/:id/match', requireAuth, async (req, res) => {
   }
 
   try {
+    // Task 37: clear out any squads that have been stuck at 'suggested'
+    // for too long, so nobody is blocked by a dead squad.
+    await expireStaleSquads();
+
     const studentResult = await pool.query(
       'SELECT id, year, academic_group, aspirant_type, matching_status FROM students WHERE id = $1',
       [studentId]
@@ -912,7 +967,7 @@ app.get('/squads/:squadId', requireAuth, async (req, res) => {
     const coverageByStudent = await getSubjectCoverage(squadId);
 
     res.json({ squad, members: attachCoverage(membersResult.rows, coverageByStudent), mentor });
-    
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong fetching squad details.' });
@@ -961,6 +1016,27 @@ app.post('/login', async (req, res) => {
   }
 });
 
+app.post('/admin/expire-stale-squads', async (req, res) => {
+  const adminSecret = req.headers['x-admin-secret'];
+  if (!adminSecret || adminSecret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: 'Admin access required.' });
+  }
+
+  try {
+    const expiredCount = await expireStaleSquads();
+    res.json({ expiredCount });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong expiring stale squads.' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server is running at http://localhost:${PORT}`);
+
+  // Task 37: also sweep automatically once an hour, so squads don't
+  // rely on someone happening to run /match to get cleaned up.
+  setInterval(() => {
+    expireStaleSquads().catch(err => console.error('Scheduled squad expiry failed:', err));
+  }, 60 * 60 * 1000);
 });
