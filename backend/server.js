@@ -671,6 +671,58 @@ app.post('/squads/:squadId/messages', requireAuth, async (req, res) => {
   }
 });
 
+
+app.get('/squads/:squadId/messages', requireAuth, async (req, res) => {
+  const squadId = parseInt(req.params.squadId);
+
+  try {
+    const squadResult = await pool.query('SELECT * FROM squads WHERE id = $1', [squadId]);
+
+    if (squadResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Squad not found.' });
+    }
+
+    const squad = squadResult.rows[0];
+
+    let isAuthorized = false;
+
+    if (req.mentor?.mentorId && req.mentor.mentorId === squad.mentor_id) {
+      isAuthorized = true;
+    } else if (req.student?.studentId) {
+      const memberCheck = await pool.query(
+        `SELECT status FROM squad_members WHERE squad_id = $1 AND student_id = $2`,
+        [squadId, req.student.studentId]
+      );
+
+      if (memberCheck.rows.length > 0 && memberCheck.rows[0].status === 'confirmed') {
+        isAuthorized = true;
+      }
+    }
+
+    if (!isAuthorized) {
+      return res.status(403).json({ error: 'You are not authorized to view messages in this squad.' });
+    }
+
+    const messagesResult = await pool.query(
+      `SELECT
+         sm.id, sm.sender_type, sm.sender_id, sm.message, sm.created_at,
+         CASE
+           WHEN sm.sender_type = 'student' THEN (SELECT name FROM students WHERE id = sm.sender_id)
+           WHEN sm.sender_type = 'mentor' THEN (SELECT name FROM mentors WHERE id = sm.sender_id)
+         END AS sender_name
+       FROM squad_messages sm
+       WHERE sm.squad_id = $1
+       ORDER BY sm.created_at ASC`,
+      [squadId]
+    );
+
+    res.json(messagesResult.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong fetching messages.' });
+  }
+});
+
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
