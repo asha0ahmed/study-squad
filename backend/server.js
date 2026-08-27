@@ -723,6 +723,60 @@ app.get('/squads/:squadId/messages', requireAuth, async (req, res) => {
   }
 });
 
+
+app.get('/students/:id/squad', requireAuth, async (req, res) => {
+  const studentId = parseInt(req.params.id);
+
+  if (studentId !== req.student.studentId) {
+    return res.status(403).json({ error: 'You can only view your own squad.' });
+  }
+
+  try {
+    const memberResult = await pool.query(
+      `SELECT squad_id, slot, join_type, status FROM squad_members WHERE student_id = $1`,
+      [studentId]
+    );
+
+    if (memberResult.rows.length === 0) {
+      return res.status(404).json({ error: 'You are not currently in a squad.' });
+    }
+
+    const myMembership = memberResult.rows[0];
+    const squadId = myMembership.squad_id;
+
+    const squadResult = await pool.query('SELECT * FROM squads WHERE id = $1', [squadId]);
+    const squad = squadResult.rows[0];
+
+    const membersResult = await pool.query(
+      `SELECT sm.slot, sm.student_id, s.name, sm.join_type, sm.status
+       FROM squad_members sm
+       JOIN students s ON s.id = sm.student_id
+       WHERE sm.squad_id = $1
+       ORDER BY sm.slot`,
+      [squadId]
+    );
+
+    let mentor = null;
+    if (squad.mentor_id) {
+      const mentorResult = await pool.query(
+        `SELECT id, name, email, institution FROM mentors WHERE id = $1`,
+        [squad.mentor_id]
+      );
+      mentor = mentorResult.rows[0] || null;
+    }
+
+    res.json({
+      squad,
+      myStatus: myMembership.status,
+      members: membersResult.rows,
+      mentor
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong fetching your squad.' });
+  }
+});
+
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
