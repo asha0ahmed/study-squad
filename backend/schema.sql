@@ -90,3 +90,14 @@ CREATE TABLE squad_members (
    -- exclusively via squad_members (student_id is UNIQUE there, enforcing
    -- one active squad per student). matching_status on students still
    -- tracks funnel state (not_started / suggested / confirmed).
+
+-- Task 34: Squad chat
+
+CREATE TABLE squad_messages (
+  id SERIAL PRIMARY KEY,
+  squad_id INTEGER NOT NULL REFERENCES squads(id),
+  sender_type VARCHAR(10) NOT NULL CHECK (sender_type IN ('student', 'mentor')),
+  sender_id INTEGER NOT NULL,
+  message TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW()
+);
