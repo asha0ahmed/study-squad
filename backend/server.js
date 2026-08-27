@@ -1,5 +1,6 @@
 const express = require('express');
 const pool = require('./db');
+const bcrypt = require('bcrypt');
 const app = express();
 const PORT = 3000;
 
@@ -20,18 +21,24 @@ app.get('/db-test', async (req, res) => {
 });
 
 app.post('/students', async (req, res) => {
-  const { name, email, institution, year, academic_group, aspirant_type } = req.body;
+  const { name, email, password, institution, year, academic_group, aspirant_type } = req.body;
 
-  if (!name || !email) {
-    return res.status(400).json({ error: 'Name and email are required.' });
+  if (!name || !email || !password) {
+    return res.status(400).json({ error: 'Name, email, and password are required.' });
+  }
+
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   }
 
   try {
+    const passwordHash = await bcrypt.hash(password, 10);
+
     const result = await pool.query(
-      `INSERT INTO students (name, email, institution, year, academic_group, aspirant_type)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING *`,
-      [name, email, institution, year, academic_group, aspirant_type]
+      `INSERT INTO students (name, email, password_hash, institution, year, academic_group, aspirant_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, name, email, institution, year, academic_group, aspirant_type, matching_status, squad_id, created_at`,
+      [name, email, passwordHash, institution, year, academic_group, aspirant_type]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
