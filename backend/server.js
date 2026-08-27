@@ -375,6 +375,69 @@ app.post('/squads/:squadId/invite', requireAuth, async (req, res) => {
   }
 });
 
+
+app.post('/invites/:inviteCode/join', requireAuth, async (req, res) => {
+  const inviteCode = req.params.inviteCode;
+  const studentId = req.student.studentId;
+
+  try {
+    const squadResult = await pool.query('SELECT * FROM squads WHERE invite_code = $1', [inviteCode]);
+
+    if (squadResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Invalid or expired invite link.' });
+    }
+
+    const squad = squadResult.rows[0];
+
+    const alreadyInSquad = await pool.query(
+      'SELECT id FROM squad_members WHERE student_id = $1',
+      [studentId]
+    );
+    if (alreadyInSquad.rows.length > 0) {
+      return res.status(400).json({ error: 'You are already in a squad.' });
+    }
+
+    const membersResult = await pool.query(
+      'SELECT slot FROM squad_members WHERE squad_id = $1 ORDER BY slot',
+      [squad.id]
+    );
+    const takenSlots = membersResult.rows.map(r => r.slot);
+
+    if (takenSlots.length >= 6) {
+      return res.status(400).json({ error: 'This squad is already full. Invite link has been used up.' });
+    }
+
+    let nextSlot = null;
+    for (let s = 5; s <= 6; s++) {
+      if (!takenSlots.includes(s)) {
+        nextSlot = s;
+        break;
+      }
+    }
+
+    if (nextSlot === null) {
+      return res.status(400).json({ error: 'No invite slots available for this squad.' });
+    }
+
+    const insertResult = await pool.query(
+      `INSERT INTO squad_members (squad_id, student_id, slot, join_type, status)
+       VALUES ($1, $2, $3, 'invite', 'pending')
+       RETURNING *`,
+      [squad.id, studentId, nextSlot]
+    );
+
+    await pool.query(
+      `UPDATE students SET matching_status = 'suggested' WHERE id = $1`,
+      [studentId]
+    );
+
+    res.status(201).json({ squad, member: insertResult.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong joining the squad.' });
+  }
+});
+
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
