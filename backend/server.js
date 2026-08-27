@@ -520,6 +520,57 @@ app.get('/mentors/available-squads', requireAuth, async (req, res) => {
   }
 });
 
+
+app.post('/squads/:squadId/assign-mentor', requireAuth, async (req, res) => {
+  const squadId = parseInt(req.params.squadId);
+  const mentorId = req.mentor?.mentorId;
+
+  if (!mentorId) {
+    return res.status(403).json({ error: 'Only mentors can be assigned to squads.' });
+  }
+
+  try {
+    const squadResult = await pool.query('SELECT * FROM squads WHERE id = $1', [squadId]);
+
+    if (squadResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Squad not found.' });
+    }
+
+    const squad = squadResult.rows[0];
+
+    if (squad.status !== 'locked') {
+      return res.status(400).json({ error: 'This squad is not yet locked and cannot be assigned a mentor.' });
+    }
+
+    if (squad.mentor_id !== null) {
+      return res.status(400).json({ error: 'This squad already has a mentor assigned.' });
+    }
+
+    const groupCheck = await pool.query(
+      `SELECT approval_status FROM mentor_groups WHERE mentor_id = $1 AND group_name = $2`,
+      [mentorId, squad.academic_group]
+    );
+
+    if (groupCheck.rows.length === 0 || groupCheck.rows[0].approval_status !== 'approved') {
+      return res.status(403).json({ error: 'You are not approved to mentor this group.' });
+    }
+
+    const updateResult = await pool.query(
+      `UPDATE squads SET mentor_id = $1 WHERE id = $2 AND mentor_id IS NULL RETURNING *`,
+      [mentorId, squadId]
+    );
+
+    if (updateResult.rows.length === 0) {
+      return res.status(409).json({ error: 'This squad was just claimed by another mentor.' });
+    }
+
+    res.json(updateResult.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong assigning you to this squad.' });
+  }
+});
+
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
