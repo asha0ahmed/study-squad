@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('./db');
 const bcrypt = require('bcrypt');
+  const jwt = require('jsonwebtoken');
 const app = express();
 const PORT = 3000;
 
@@ -90,6 +91,48 @@ app.post('/students/:id/subjects', async (req, res) => {
     }
     console.error(err);
     res.status(500).json({ error: 'Something went wrong saving subjects.' });
+  }
+});
+
+app.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required.' });
+  }
+
+  try {
+    const result = await pool.query('SELECT * FROM students WHERE email = $1', [email]);
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    const student = result.rows[0];
+    const passwordMatches = await bcrypt.compare(password, student.password_hash);
+
+    if (!passwordMatches) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    const token = jwt.sign(
+      { studentId: student.id, email: student.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({
+      token,
+      student: {
+        id: student.id,
+        name: student.name,
+        email: student.email,
+        academic_group: student.academic_group,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong logging in.' });
   }
 });
 
