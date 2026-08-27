@@ -613,6 +613,64 @@ app.patch('/squads/:squadId/reassign-mentor', async (req, res) => {
   }
 });
 
+
+app.post('/squads/:squadId/messages', requireAuth, async (req, res) => {
+  const squadId = parseInt(req.params.squadId);
+  const { message } = req.body;
+
+  if (!message || typeof message !== 'string' || message.trim().length === 0) {
+    return res.status(400).json({ error: 'Message text is required.' });
+  }
+
+  try {
+    const squadResult = await pool.query('SELECT * FROM squads WHERE id = $1', [squadId]);
+
+    if (squadResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Squad not found.' });
+    }
+
+    const squad = squadResult.rows[0];
+
+    if (squad.status !== 'locked') {
+      return res.status(400).json({ error: 'This squad is not locked yet. Chat is not available.' });
+    }
+
+    let senderType = null;
+    let senderId = null;
+
+    if (req.mentor?.mentorId && req.mentor.mentorId === squad.mentor_id) {
+      senderType = 'mentor';
+      senderId = req.mentor.mentorId;
+    } else if (req.student?.studentId) {
+      const memberCheck = await pool.query(
+        `SELECT status FROM squad_members WHERE squad_id = $1 AND student_id = $2`,
+        [squadId, req.student.studentId]
+      );
+
+      if (memberCheck.rows.length > 0 && memberCheck.rows[0].status === 'confirmed') {
+        senderType = 'student';
+        senderId = req.student.studentId;
+      }
+    }
+
+    if (!senderType) {
+      return res.status(403).json({ error: 'You are not authorized to send messages in this squad.' });
+    }
+
+    const insertResult = await pool.query(
+      `INSERT INTO squad_messages (squad_id, sender_type, sender_id, message)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [squadId, senderType, senderId, message.trim()]
+    );
+
+    res.status(201).json(insertResult.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong sending the message.' });
+  }
+});
+
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
