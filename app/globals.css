@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+/*
+  Study Squad — "The Scholar's Sanctuary" design tokens.
+  Source of truth: master build prompt, Section 2.
+*/
+
+:root {
+  --ink: #1a1c1e;
+  --parchment: #fdfbf7;
+  --oxblood: #7b2d26;
+  --emerald: #2d5a27;
+  --amber: #9c7a1f; /* muted -- pending/warning states only, used sparingly */
+
+  --ink-70: rgba(26, 28, 30, 0.7);
+  --ink-45: rgba(26, 28, 30, 0.45);
+  --ink-20: rgba(26, 28, 30, 0.2);
+  --ink-10: rgba(26, 28, 30, 0.1);
+  --parchment-dim: #f4f0e6;
+}
+
+@theme inline {
+  /* Colors */
+  --color-ink: var(--ink);
+  --color-ink-70: var(--ink-70);
+  --color-ink-45: var(--ink-45);
+  --color-ink-20: var(--ink-20);
+  --color-ink-10: var(--ink-10);
+  --color-parchment: var(--parchment);
+  --color-parchment-dim: var(--parchment-dim);
+  --color-oxblood: var(--oxblood);
+  --color-emerald: var(--emerald);
+  --color-amber: var(--amber);
+
+  /* Fonts */
+  --font-serif: "Fraunces", ui-serif, Georgia, serif;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+
+  /*
+    Hard constraint from the brief: max 2px border-radius, everywhere.
+    Overriding Tailwind's default radius scale so every rounded-* utility
+    resolves to something inside that limit instead of a soft pill/blob.
+  */
+  --radius-none: 0px;
+  --radius-xs: 1px;
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 2px;
+  --radius-xl: 2px;
+  --radius-2xl: 2px;
+  --radius-3xl: 2px;
+  --radius-full: 2px;
+}
+
+body {
+  background: var(--color-parchment);
+  color: var(--color-ink);
+}
+
+/* Editorial marginalia -- soft encouraging sub-text. Use sparingly. */
+.marginalia {
+  font-family: var(--font-serif);
+  font-style: italic;
+  color: var(--color-ink-70);
+}
+
+/*
+  Subtle 1px graph-paper grid. Apply to a surface via `bg-graph-paper`
+  (paired with a background color utility on the same element).
+*/
+.bg-graph-paper {
+  background-image:
+    linear-gradient(var(--color-ink-10) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-ink-10) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/*
+  Restrained "desk lamp glow" -- a soft radial gradient for parchment
+  surfaces. Apply via `bg-desk-lamp` on a positioned container.
+*/
+.bg-desk-lamp {
+  background-image: radial-gradient(
+    ellipse 60% 40% at 50% 0%,
+    rgba(123, 45, 38, 0.06),
+    transparent 70%
+  );
+}
+
+/* Architectural, ink-stamp button base. Compose with color utilities. */
+.btn-stamp {
+  border: 1px solid var(--color-ink);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  padding: 0.65rem 1.25rem;
+  transition: transform 0.08s ease, opacity 0.12s ease;
+}
+
+.btn-stamp:active {
+  transform: translateY(1px);
+}
