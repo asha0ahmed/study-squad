@@ -59,6 +59,12 @@ export default function DeskPlaceholderPage() {
           Go to The Profiler
         </button>
         <button
+          onClick={() => router.push("/squad/find")}
+          className="btn-stamp mt-3 bg-emerald text-parchment"
+        >
+          Find My Squad
+        </button>
+        <button
           onClick={() => {
             logout();
             router.replace("/auth");
