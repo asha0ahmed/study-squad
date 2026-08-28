@@ -1,4 +1,5 @@
 const express = require('express');
+const cors = require('cors');
 const pool = require('./db');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
@@ -7,6 +8,12 @@ const { findAutoSquad } = require('./utils/matching');
 const app = express();
 const PORT = 3000;
 
+// Without this, every request from the frontend (a different origin --
+// e.g. localhost:3001 -- than this server's localhost:3000) is blocked by
+// the browser's CORS policy before it even reaches these routes. Tools
+// like curl don't enforce CORS, so this gap doesn't show up in
+// server-to-server testing -- only in an actual browser.
+app.use(cors());
 app.use(express.json());
 
 // Task 36: looks up which student covers which subject(s) in a squad.
