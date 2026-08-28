@@ -206,7 +206,7 @@ app.post('/mentors', async (req, res) => {
     const mentorResult = await pool.query(
       `INSERT INTO mentors (name, email, password_hash, institution)
        VALUES ($1, $2, $3, $4)
-       RETURNING id, name, email, institution, approval_status, created_at`,
+       RETURNING id, name, email, institution, created_at`,
       [name, email, passwordHash, institution]
     );
 
