@@ -1,14 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 import { ApiError, loginStudent } from "@/lib/api";
 import { DossierCard, FormError, SubmitButton } from "@/components/auth/DossierCard";
 import { TextField } from "@/components/auth/FormFields";
 
-export default function StudentLoginPage() {
+function StudentLoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const inviteCode = searchParams.get("inviteCode");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -20,7 +22,7 @@ export default function StudentLoginPage() {
     setLoading(true);
     try {
       await loginStudent(email, password);
-      router.push("/desk");
+      router.push(inviteCode ? `/invite/${inviteCode}` : "/desk");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't sign you in. Try again.");
     } finally {
@@ -56,7 +58,10 @@ export default function StudentLoginPage() {
 
         <p className="mt-6 text-center text-sm text-ink-70">
           First time here?{" "}
-          <Link href="/auth/student/signup" className="font-semibold text-oxblood underline">
+          <Link
+            href={inviteCode ? `/auth/student/signup?inviteCode=${inviteCode}` : "/auth/student/signup"}
+            className="font-semibold text-oxblood underline"
+          >
             Start your dossier
           </Link>
         </p>
@@ -67,5 +72,19 @@ export default function StudentLoginPage() {
         </p>
       </DossierCard>
     </main>
+  );
+}
+
+export default function StudentLoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex flex-1 items-center justify-center">
+          <p className="marginalia text-ink-45">Loading…</p>
+        </main>
+      }
+    >
+      <StudentLoginForm />
+    </Suspense>
   );
 }

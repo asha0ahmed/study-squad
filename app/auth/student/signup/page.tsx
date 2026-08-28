@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 import { ApiError, loginStudent, signupStudent } from "@/lib/api";
 import { DossierCard, FormError, SubmitButton } from "@/components/auth/DossierCard";
 import { SelectField, TextField } from "@/components/auth/FormFields";
@@ -32,8 +32,10 @@ const ACADEMIC_GROUP_OPTIONS = [
   { value: "Arts", label: "Arts" },
 ];
 
-export default function StudentSignupPage() {
+function StudentSignupForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const inviteCode = searchParams.get("inviteCode") ?? undefined;
   const [form, setForm] = useState({
     name: "",
     email: "",
@@ -69,11 +71,15 @@ export default function StudentSignupPage() {
         year: form.year,
         academic_group: form.academic_group as "Science" | "Arts",
         aspirant_type: form.aspirant_type,
+        inviteCode,
       });
       // Signup doesn't return a session token — only /login does — so we
       // log in right after with the same credentials for a one-step flow.
       await loginStudent(form.email, form.password);
-      router.push("/desk");
+      // If signup came from an invite link and auto-join at signup time
+      // didn't apply (e.g. slots filled in the meantime), send them to
+      // accept it explicitly; otherwise straight to their desk.
+      router.push(inviteCode ? `/invite/${inviteCode}` : "/desk");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't create your account. Try again.");
     } finally {
@@ -158,5 +164,19 @@ export default function StudentSignupPage() {
         </p>
       </DossierCard>
     </main>
+  );
+}
+
+export default function StudentSignupPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex flex-1 items-center justify-center">
+          <p className="marginalia text-ink-45">Loading…</p>
+        </main>
+      }
+    >
+      <StudentSignupForm />
+    </Suspense>
   );
 }
