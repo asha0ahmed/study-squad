@@ -80,7 +80,15 @@ export default function SquadPage() {
     setInviteError(null);
     try {
       const result = await createInvite(squad.squad.id);
-      setInvite(result);
+      // The backend returns a placeholder domain (yourapp.com/join/...) that
+      // isn't wherever this app actually runs. Build the real, clickable
+      // link from wherever we're actually running -- localhost during dev,
+      // the real domain once one exists -- instead of trusting that field.
+      const realLink =
+        typeof window !== "undefined"
+          ? `${window.location.origin}/invite/${result.inviteCode}`
+          : result.inviteLink;
+      setInvite({ inviteCode: result.inviteCode, inviteLink: realLink });
     } catch (err) {
       setInviteError(err instanceof ApiError ? err.message : "Couldn't generate an invite link.");
     } finally {
@@ -226,9 +234,19 @@ export default function SquadPage() {
                     <p className="font-sans text-sm text-ink">
                       Code: <span className="font-semibold">{invite.inviteCode}</span>
                     </p>
-                    <p className="mt-1 break-all font-sans text-sm text-ink-70">
+                    <a
+                      href={invite.inviteLink}
+                      className="mt-1 block break-all font-sans text-sm text-oxblood underline"
+                    >
                       {invite.inviteLink}
-                    </p>
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => navigator.clipboard.writeText(invite.inviteLink)}
+                      className="btn-stamp mt-3 bg-ink text-parchment"
+                    >
+                      Copy Link
+                    </button>
                   </div>
                 ) : (
                   <button
