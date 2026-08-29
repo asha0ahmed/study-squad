@@ -114,3 +114,23 @@ CREATE TABLE squad_subject_coverage (
   created_at TIMESTAMP DEFAULT NOW(),
   UNIQUE (squad_id, student_id, subject_id)
 );
+
+-- Mentor-fee subscription payments. A student must have one row here with
+-- status = 'approved' before they're allowed to run matching. Submitted by
+-- the student (self-reported payment details), reviewed by an admin via
+-- the x-admin-secret-protected admin endpoints.
+CREATE TABLE payments (
+  id SERIAL PRIMARY KEY,
+  student_id INTEGER NOT NULL REFERENCES students(id),
+  plan VARCHAR(20) NOT NULL CHECK (plan IN ('1_month', '6_month')),
+  amount INTEGER NOT NULL,
+  method VARCHAR(20) NOT NULL CHECK (method IN ('nagad', 'bkash')),
+  sender_phone VARCHAR(20) NOT NULL,
+  trx_id VARCHAR(50) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  created_at TIMESTAMP DEFAULT NOW(),
+  reviewed_at TIMESTAMP
+);
+
+CREATE INDEX idx_payments_student ON payments(student_id);
+CREATE INDEX idx_payments_status ON payments(status);

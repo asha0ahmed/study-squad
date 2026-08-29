@@ -98,6 +98,37 @@ async function expireStaleSquads() {
   return staleSquadIds.length;
 }
 
+// Replaces the old "4 manual confirms -> lock" flow. There is no confirm
+// step anymore -- every member is inserted already 'confirmed'. A squad
+// becomes active (status='locked', Squad Notes unlocks) automatically the
+// moment its member count reaches 4, whether that 4th member arrived via
+// matching or an invite link. Safe to call any time; no-ops if already
+// active or still under 4.
+async function activateSquadIfReady(squadId) {
+  const squadResult = await pool.query('SELECT status FROM squads WHERE id = $1', [squadId]);
+  if (squadResult.rows.length === 0 || squadResult.rows[0].status === 'locked') {
+    return false;
+  }
+
+  const countResult = await pool.query(
+    'SELECT COUNT(*) FROM squad_members WHERE squad_id = $1',
+    [squadId]
+  );
+  const memberCount = parseInt(countResult.rows[0].count, 10);
+
+  if (memberCount < 4) {
+    return false;
+  }
+
+  await pool.query(`UPDATE squads SET status = 'locked' WHERE id = $1`, [squadId]);
+  await pool.query(
+    `UPDATE students SET matching_status = 'confirmed'
+     WHERE id IN (SELECT student_id FROM squad_members WHERE squad_id = $1)`,
+    [squadId]
+  );
+  return true;
+}
+
 app.get('/', (req, res) => {
   res.send('Study Squad backend is running!');
 });
@@ -149,17 +180,15 @@ app.post('/students', async (req, res) => {
         const takenSlots = membersResult.rows.map(r => r.slot);
 
         let nextSlot = null;
-        for (let s = 5; s <= 6; s++) {
-          if (!takenSlots.includes(s)) {
-            nextSlot = s;
-            break;
-          }
+        if (takenSlots.length < 6) {
+          nextSlot = 1;
+          while (takenSlots.includes(nextSlot)) nextSlot++;
         }
 
         if (nextSlot !== null) {
           await pool.query(
             `INSERT INTO squad_members (squad_id, student_id, slot, join_type, status)
-             VALUES ($1, $2, $3, 'invite', 'pending')`,
+             VALUES ($1, $2, $3, 'invite', 'confirmed')`,
             [squad.id, newStudent.id, nextSlot]
           );
 
@@ -167,6 +196,8 @@ app.post('/students', async (req, res) => {
             `UPDATE students SET matching_status = 'suggested' WHERE id = $1`,
             [newStudent.id]
           );
+
+          await activateSquadIfReady(squad.id);
 
           newStudent.matching_status = 'suggested';
           newStudent.joinedSquad = squad.id;
@@ -351,6 +382,176 @@ app.post('/students/:id/subjects', requireAuth, async (req, res) => {
 });
 
 
+// ---- Mentor-fee subscription payments ----
+// A student must have one row here with status = 'approved' before they
+// can run matching (see the payment gate in POST /students/:id/match).
+// Submission is self-reported (phone + Trx ID) and reviewed by an admin.
+
+const PAYMENT_PLANS = {
+  '1_month': 99,
+  '6_month': 499,
+};
+const PAYMENT_METHODS = ['nagad', 'bkash'];
+
+app.post('/students/:id/payments', requireAuth, async (req, res) => {
+  const studentId = parseInt(req.params.id);
+
+  if (studentId !== req.student.studentId) {
+    return res.status(403).json({ error: 'You can only submit a payment for your own account.' });
+  }
+
+  const { plan, method, sender_phone, trx_id } = req.body;
+
+  if (!PAYMENT_PLANS[plan]) {
+    return res.status(400).json({ error: 'plan must be 1_month or 6_month.' });
+  }
+  if (!PAYMENT_METHODS.includes(method)) {
+    return res.status(400).json({ error: 'method must be nagad or bkash.' });
+  }
+  if (!sender_phone || !trx_id) {
+    return res.status(400).json({ error: 'sender_phone and trx_id are required.' });
+  }
+
+  try {
+    // Don't let a student stack up duplicate pending submissions -- if one
+    // is already awaiting review, point them at it instead of creating a
+    // second one that would confuse the admin queue.
+    const existingPending = await pool.query(
+      `SELECT id FROM payments WHERE student_id = $1 AND status = 'pending'`,
+      [studentId]
+    );
+    if (existingPending.rows.length > 0) {
+      return res.status(400).json({
+        error: 'You already have a payment awaiting review.',
+        paymentId: existingPending.rows[0].id,
+      });
+    }
+
+    const amount = PAYMENT_PLANS[plan];
+    const result = await pool.query(
+      `INSERT INTO payments (student_id, plan, amount, method, sender_phone, trx_id, status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+       RETURNING *`,
+      [studentId, plan, amount, method, sender_phone, trx_id]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong submitting your payment.' });
+  }
+});
+
+// The student's own latest payment -- lets the frontend show "awaiting
+// admin approval" / "approved" / "rejected, try again" without needing
+// admin access.
+app.get('/students/:id/payments/latest', requireAuth, async (req, res) => {
+  const studentId = parseInt(req.params.id);
+
+  if (studentId !== req.student.studentId) {
+    return res.status(403).json({ error: 'You can only view your own payment status.' });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT * FROM payments WHERE student_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [studentId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No payment submitted yet.' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong loading your payment status.' });
+  }
+});
+
+app.get('/admin/payments', async (req, res) => {
+  const adminSecret = req.headers['x-admin-secret'];
+  if (!adminSecret || adminSecret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: 'Admin access required.' });
+  }
+
+  const statusFilter = req.query.status; // optional: pending | approved | rejected
+
+  try {
+    const params = [];
+    let where = '';
+    if (statusFilter) {
+      params.push(statusFilter);
+      where = `WHERE p.status = $${params.length}`;
+    }
+
+    const result = await pool.query(
+      `SELECT p.*, s.name AS student_name, s.email AS student_email
+       FROM payments p
+       JOIN students s ON s.id = p.student_id
+       ${where}
+       ORDER BY p.created_at DESC`,
+      params
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong loading payments.' });
+  }
+});
+
+app.patch('/admin/payments/:paymentId/approve', async (req, res) => {
+  const adminSecret = req.headers['x-admin-secret'];
+  if (!adminSecret || adminSecret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: 'Admin access required.' });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE payments SET status = 'approved', reviewed_at = NOW()
+       WHERE id = $1 AND status = 'pending'
+       RETURNING *`,
+      [req.params.paymentId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Pending payment not found.' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong approving this payment.' });
+  }
+});
+
+app.patch('/admin/payments/:paymentId/reject', async (req, res) => {
+  const adminSecret = req.headers['x-admin-secret'];
+  if (!adminSecret || adminSecret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: 'Admin access required.' });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE payments SET status = 'rejected', reviewed_at = NOW()
+       WHERE id = $1 AND status = 'pending'
+       RETURNING *`,
+      [req.params.paymentId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Pending payment not found.' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong rejecting this payment.' });
+  }
+});
+
+
 app.post('/students/:id/match', requireAuth, async (req, res) => {
   const studentId = parseInt(req.params.id);
 
@@ -378,52 +579,152 @@ app.post('/students/:id/match', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'You are already matched or in progress. Cannot start new matching.' });
     }
 
-    const matchedStudents = await findAutoSquad(pool, {
-      year: student.year,
-      academic_group: student.academic_group,
-      aspirant_type: student.aspirant_type,
-      requestingStudentId: studentId
-    });
-
-    if (matchedStudents.length === 0) {
-      return res.status(404).json({ error: 'No eligible students found to form a squad right now. Try again later.' });
+    // Mentor-fee subscription gate: matching requires an admin-approved
+    // payment on file. See POST /students/:id/payments and the
+    // /admin/payments review endpoints.
+    const paymentCheck = await pool.query(
+      `SELECT id FROM payments WHERE student_id = $1 AND status = 'approved'
+       ORDER BY created_at DESC LIMIT 1`,
+      [studentId]
+    );
+    if (paymentCheck.rows.length === 0) {
+      return res.status(402).json({
+        error: 'A confirmed mentor-fee payment is required before matching. Submit a payment and wait for admin approval.',
+      });
     }
 
-    const squadResult = await pool.query(
-      `INSERT INTO squads (academic_group, year, aspirant_type, status)
-       VALUES ($1, $2, $3, 'suggested')
-       RETURNING *`,
-      [student.academic_group, student.year, student.aspirant_type]
+    // Prefer joining an existing open squad in the same year, academic
+    // group, and aspirant type over always creating a brand new one --
+    // this is what lets squads fill up one applicant at a time (there is
+    // no manual "confirm" step anymore; everyone who joins is immediately
+    // an active member).
+    const openSquadResult = await pool.query(
+      `SELECT sq.id
+       FROM squads sq
+       LEFT JOIN squad_members sm ON sm.squad_id = sq.id
+       WHERE sq.year = $1 AND sq.academic_group = $2 AND sq.aspirant_type = $3
+         AND sq.status != 'expired'
+       GROUP BY sq.id, sq.created_at
+       HAVING COUNT(sm.id) < 6
+       ORDER BY COUNT(sm.id) DESC, sq.created_at ASC
+       LIMIT 1`,
+      [student.year, student.academic_group, student.aspirant_type]
     );
-    const squad = squadResult.rows[0];
 
-    const members = [];
-    let slot = 1;
-    for (const m of matchedStudents) {
-      const memberResult = await pool.query(
-        `INSERT INTO squad_members (squad_id, student_id, slot, join_type, status)
-         VALUES ($1, $2, $3, 'auto', 'pending')
-         RETURNING *`,
-        [squad.id, m.student_id, slot]
+    let squad;
+    let members;
+
+    if (openSquadResult.rows.length > 0) {
+      const squadId = openSquadResult.rows[0].id;
+
+      const slotResult = await pool.query(
+        `SELECT slot FROM squad_members WHERE squad_id = $1 ORDER BY slot`,
+        [squadId]
       );
+      const takenSlots = slotResult.rows.map((r) => r.slot);
+      let nextSlot = 1;
+      while (takenSlots.includes(nextSlot)) nextSlot++;
 
-            members.push({ ...memberResult.rows[0], name: m.name, contributes: m.contributes });
-      slot++;
+      // Contribute this student's strong subjects (proficiency >= 4) that
+      // aren't already covered by an existing member, so they add real
+      // value to the squad rather than duplicating existing coverage.
+      const strongSubjectsResult = await pool.query(
+        `SELECT subject_id FROM student_subjects WHERE student_id = $1 AND proficiency >= 4`,
+        [studentId]
+      );
+      const alreadyCoveredResult = await pool.query(
+        `SELECT DISTINCT subject_id FROM squad_subject_coverage WHERE squad_id = $1`,
+        [squadId]
+      );
+      const alreadyCovered = new Set(alreadyCoveredResult.rows.map((r) => r.subject_id));
+      const contributes = strongSubjectsResult.rows
+        .map((r) => r.subject_id)
+        .filter((id) => !alreadyCovered.has(id));
 
       await pool.query(
-        `UPDATE students SET matching_status = 'suggested' WHERE id = $1`,
-        [m.student_id]
+        `INSERT INTO squad_members (squad_id, student_id, slot, join_type, status)
+         VALUES ($1, $2, $3, 'auto', 'confirmed')`,
+        [squadId, studentId, nextSlot]
       );
 
-      // Save which subject(s) this student covers in this squad, so it
-      // can be shown later (e.g. "Rahim is your Physics mentor").
-      for (const subjectId of m.contributes) {
+      for (const subjectId of contributes) {
         await pool.query(
           `INSERT INTO squad_subject_coverage (squad_id, student_id, subject_id)
            VALUES ($1, $2, $3)
            ON CONFLICT (squad_id, student_id, subject_id) DO NOTHING`,
-          [squad.id, m.student_id, subjectId]
+          [squadId, studentId, subjectId]
         );
+      }
+
+      await pool.query(`UPDATE students SET matching_status = 'suggested' WHERE id = $1`, [studentId]);
+      await activateSquadIfReady(squadId);
+
+      const finalSquadResult = await pool.query('SELECT * FROM squads WHERE id = $1', [squadId]);
+      squad = finalSquadResult.rows[0];
+
+      const membersResult = await pool.query(
+        `SELECT sm.slot, sm.student_id, s.name, sm.join_type, sm.status
+         FROM squad_members sm
+         JOIN students s ON s.id = sm.student_id
+         WHERE sm.squad_id = $1
+         ORDER BY sm.slot`,
+        [squadId]
+      );
+      members = membersResult.rows;
+    } else {
+      // No open squad exists yet -- try to form a brand new one from
+      // everyone currently eligible and waiting.
+      const matchedStudents = await findAutoSquad(pool, {
+        year: student.year,
+        academic_group: student.academic_group,
+        aspirant_type: student.aspirant_type,
+        requestingStudentId: studentId,
+      });
+
+      if (matchedStudents.length === 0) {
+        return res.status(404).json({ error: 'No eligible students found to form a squad right now. Try again later.' });
+      }
+
+      const squadResult = await pool.query(
+        `INSERT INTO squads (academic_group, year, aspirant_type, status)
+         VALUES ($1, $2, $3, 'suggested')
+         RETURNING *`,
+        [student.academic_group, student.year, student.aspirant_type]
+      );
+      squad = squadResult.rows[0];
+
+      members = [];
+      let slot = 1;
+      for (const m of matchedStudents) {
+        const memberResult = await pool.query(
+          `INSERT INTO squad_members (squad_id, student_id, slot, join_type, status)
+           VALUES ($1, $2, $3, 'auto', 'confirmed')
+           RETURNING *`,
+          [squad.id, m.student_id, slot]
+        );
+
+        members.push({ ...memberResult.rows[0], name: m.name, contributes: m.contributes });
+        slot++;
+
+        await pool.query(
+          `UPDATE students SET matching_status = 'suggested' WHERE id = $1`,
+          [m.student_id]
+        );
+
+        for (const subjectId of m.contributes) {
+          await pool.query(
+            `INSERT INTO squad_subject_coverage (squad_id, student_id, subject_id)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (squad_id, student_id, subject_id) DO NOTHING`,
+            [squad.id, m.student_id, subjectId]
+          );
+        }
+      }
+
+      const becameActive = await activateSquadIfReady(squad.id);
+      if (becameActive) {
+        const refreshed = await pool.query('SELECT * FROM squads WHERE id = $1', [squad.id]);
+        squad = refreshed.rows[0];
       }
     }
 
@@ -431,65 +732,6 @@ app.post('/students/:id/match', requireAuth, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong running matching.' });
-  }
-});
-
-
-app.post('/squads/:squadId/confirm', requireAuth, async (req, res) => {
-  const squadId = parseInt(req.params.squadId);
-  const studentId = req.student.studentId;
-
-  try {
-    const memberCheck = await pool.query(
-      `SELECT * FROM squad_members WHERE squad_id = $1 AND student_id = $2`,
-      [squadId, studentId]
-    );
-
-    if (memberCheck.rows.length === 0) {
-      return res.status(403).json({ error: 'You are not a member of this squad.' });
-    }
-
-    await pool.query(
-      `UPDATE squad_members SET status = 'confirmed' WHERE squad_id = $1 AND student_id = $2`,
-      [squadId, studentId]
-    );
-
-    const confirmedResult = await pool.query(
-      `SELECT student_id FROM squad_members WHERE squad_id = $1 AND status = 'confirmed'`,
-      [squadId]
-    );
-    const confirmedCount = confirmedResult.rows.length;
-
-    const squadResult = await pool.query('SELECT * FROM squads WHERE id = $1', [squadId]);
-    let squad = squadResult.rows[0];
-
-    if (confirmedCount >= 4 && squad.status !== 'locked') {
-      const lockResult = await pool.query(
-        `UPDATE squads SET status = 'locked' WHERE id = $1 RETURNING *`,
-        [squadId]
-      );
-      squad = lockResult.rows[0];
-
-      const confirmedIds = confirmedResult.rows.map(r => r.student_id);
-      await pool.query(
-        `UPDATE students SET matching_status = 'confirmed' WHERE id = ANY($1::int[])`,
-        [confirmedIds]
-      );
-    }
-
-    const membersResult = await pool.query(
-      `SELECT sm.slot, sm.student_id, s.name, sm.join_type, sm.status
-       FROM squad_members sm
-       JOIN students s ON s.id = sm.student_id
-       WHERE sm.squad_id = $1
-       ORDER BY sm.slot`,
-      [squadId]
-    );
-
-    res.json({ squad, members: membersResult.rows });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Something went wrong confirming your squad membership.' });
   }
 });
 
@@ -559,21 +801,15 @@ app.post('/invites/:inviteCode/join', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'This squad is already full. Invite link has been used up.' });
     }
 
-    let nextSlot = null;
-    for (let s = 5; s <= 6; s++) {
-      if (!takenSlots.includes(s)) {
-        nextSlot = s;
-        break;
-      }
-    }
-
-    if (nextSlot === null) {
-      return res.status(400).json({ error: 'No invite slots available for this squad.' });
-    }
+    // Squads now fill up incrementally (no fixed "first 4 via matching,
+    // last 2 via invite" split), so an invite can land in any open slot,
+    // not just 5-6.
+    let nextSlot = 1;
+    while (takenSlots.includes(nextSlot)) nextSlot++;
 
     const insertResult = await pool.query(
       `INSERT INTO squad_members (squad_id, student_id, slot, join_type, status)
-       VALUES ($1, $2, $3, 'invite', 'pending')
+       VALUES ($1, $2, $3, 'invite', 'confirmed')
        RETURNING *`,
       [squad.id, studentId, nextSlot]
     );
@@ -583,13 +819,186 @@ app.post('/invites/:inviteCode/join', requireAuth, async (req, res) => {
       [studentId]
     );
 
-    res.status(201).json({ squad, member: insertResult.rows[0] });
+    await activateSquadIfReady(squad.id);
+    const finalSquadResult = await pool.query('SELECT * FROM squads WHERE id = $1', [squad.id]);
+
+    res.status(201).json({ squad: finalSquadResult.rows[0], member: insertResult.rows[0] });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong joining the squad.' });
   }
 });
 
+
+// How many of a student's High-priority-to-improve subjects are covered
+// by *other* members of a given squad. Used to compare "is this candidate
+// squad a better fit than my current one" for the suggested-squad check
+// below. A simple, honest heuristic -- not a sophisticated recommender --
+// but it directly reflects what the student said they most want help with.
+async function highPriorityCoverageScore(squadId, studentId) {
+  const highPriorityResult = await pool.query(
+    `SELECT subject_id FROM student_subjects WHERE student_id = $1 AND improvement_priority = 'High'`,
+    [studentId]
+  );
+  const highPriorityIds = highPriorityResult.rows.map((r) => r.subject_id);
+  if (highPriorityIds.length === 0) return 0;
+
+  const coverageResult = await pool.query(
+    `SELECT DISTINCT subject_id FROM squad_subject_coverage
+     WHERE squad_id = $1 AND student_id != $2 AND subject_id = ANY($3::int[])`,
+    [squadId, studentId, highPriorityIds]
+  );
+  return coverageResult.rows.length;
+}
+
+// Checks whether a better-fitting squad currently exists for this student
+// than the one they're already in. "Better" = strictly more of their
+// High-priority subjects are covered by teammates. Purely informational --
+// switching is the student's choice via POST .../switch-squad.
+app.get('/students/:id/suggested-squad', requireAuth, async (req, res) => {
+  const studentId = parseInt(req.params.id);
+
+  if (studentId !== req.student.studentId) {
+    return res.status(403).json({ error: 'You can only view suggestions for your own account.' });
+  }
+
+  try {
+    const memberResult = await pool.query(
+      `SELECT sm.squad_id, sq.year, sq.academic_group, sq.aspirant_type
+       FROM squad_members sm
+       JOIN squads sq ON sq.id = sm.squad_id
+       WHERE sm.student_id = $1`,
+      [studentId]
+    );
+
+    if (memberResult.rows.length === 0) {
+      return res.json({ suggestion: null });
+    }
+
+    const current = memberResult.rows[0];
+    const currentScore = await highPriorityCoverageScore(current.squad_id, studentId);
+
+    const candidatesResult = await pool.query(
+      `SELECT sq.id
+       FROM squads sq
+       LEFT JOIN squad_members sm ON sm.squad_id = sq.id
+       WHERE sq.year = $1 AND sq.academic_group = $2 AND sq.aspirant_type = $3
+         AND sq.id != $4 AND sq.status != 'expired'
+       GROUP BY sq.id
+       HAVING COUNT(sm.id) < 6`,
+      [current.year, current.academic_group, current.aspirant_type, current.squad_id]
+    );
+
+    let best = null;
+    for (const row of candidatesResult.rows) {
+      const score = await highPriorityCoverageScore(row.id, studentId);
+      if (score > currentScore && (!best || score > best.score)) {
+        best = { squadId: row.id, score };
+      }
+    }
+
+    if (!best) {
+      return res.json({ suggestion: null });
+    }
+
+    res.json({
+      suggestion: {
+        squadId: best.squadId,
+        currentCoverage: currentScore,
+        suggestedCoverage: best.score,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong checking for a better squad match.' });
+  }
+});
+
+// Moves a student from their current squad into a better-fitting one they
+// were shown via GET .../suggested-squad. Entirely opt-in.
+app.post('/students/:id/switch-squad', requireAuth, async (req, res) => {
+  const studentId = parseInt(req.params.id);
+
+  if (studentId !== req.student.studentId) {
+    return res.status(403).json({ error: 'You can only switch your own squad.' });
+  }
+
+  const { targetSquadId } = req.body;
+  if (!targetSquadId) {
+    return res.status(400).json({ error: 'targetSquadId is required.' });
+  }
+
+  try {
+    const currentResult = await pool.query(
+      `SELECT squad_id FROM squad_members WHERE student_id = $1`,
+      [studentId]
+    );
+    if (currentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'You are not currently in a squad.' });
+    }
+    const oldSquadId = currentResult.rows[0].squad_id;
+
+    if (oldSquadId === targetSquadId) {
+      return res.status(400).json({ error: 'You are already in this squad.' });
+    }
+
+    const targetSlotsResult = await pool.query(
+      `SELECT slot FROM squad_members WHERE squad_id = $1 ORDER BY slot`,
+      [targetSquadId]
+    );
+    const taken = targetSlotsResult.rows.map((r) => r.slot);
+    if (taken.length >= 6) {
+      return res.status(400).json({ error: 'That squad is already full.' });
+    }
+    let nextSlot = 1;
+    while (taken.includes(nextSlot)) nextSlot++;
+
+    await pool.query(
+      `DELETE FROM squad_members WHERE squad_id = $1 AND student_id = $2`,
+      [oldSquadId, studentId]
+    );
+    await pool.query(
+      `DELETE FROM squad_subject_coverage WHERE squad_id = $1 AND student_id = $2`,
+      [oldSquadId, studentId]
+    );
+
+    await pool.query(
+      `INSERT INTO squad_members (squad_id, student_id, slot, join_type, status)
+       VALUES ($1, $2, $3, 'auto', 'confirmed')`,
+      [targetSquadId, studentId, nextSlot]
+    );
+
+    const strongSubjectsResult = await pool.query(
+      `SELECT subject_id FROM student_subjects WHERE student_id = $1 AND proficiency >= 4`,
+      [studentId]
+    );
+    const alreadyCoveredResult = await pool.query(
+      `SELECT DISTINCT subject_id FROM squad_subject_coverage WHERE squad_id = $1`,
+      [targetSquadId]
+    );
+    const alreadyCovered = new Set(alreadyCoveredResult.rows.map((r) => r.subject_id));
+    const contributes = strongSubjectsResult.rows
+      .map((r) => r.subject_id)
+      .filter((id) => !alreadyCovered.has(id));
+
+    for (const subjectId of contributes) {
+      await pool.query(
+        `INSERT INTO squad_subject_coverage (squad_id, student_id, subject_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (squad_id, student_id, subject_id) DO NOTHING`,
+        [targetSquadId, studentId, subjectId]
+      );
+    }
+
+    await activateSquadIfReady(targetSquadId);
+
+    const finalSquad = await pool.query('SELECT * FROM squads WHERE id = $1', [targetSquadId]);
+    res.json({ squad: finalSquad.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong switching squads.' });
+  }
+});
 
 
 app.get('/mentors/available-squads', requireAuth, async (req, res) => {
