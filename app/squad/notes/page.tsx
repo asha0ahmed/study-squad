@@ -58,9 +58,10 @@ function SquadNotesContent() {
       if (session.role === "student" && session.student) {
         const result = await getMySquad(session.student.id);
         if (result.squad.status !== "locked") {
-          setAccess({ state: "blocked", reason: "Squad Notes unlocks once your squad is locked." });
-        } else if (result.myStatus !== "confirmed") {
-          setAccess({ state: "blocked", reason: "Confirm your spot to unlock Squad Notes." });
+          setAccess({
+            state: "blocked",
+            reason: "Squad Notes unlocks once your squad reaches 4 members.",
+          });
         } else {
           setAccess({ state: "ready", squadId: result.squad.id });
         }

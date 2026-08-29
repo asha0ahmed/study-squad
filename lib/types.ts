@@ -119,11 +119,6 @@ export interface RosterMember {
   status: MemberStatus;
 }
 
-export interface ConfirmResult {
-  squad: Squad;
-  members: RosterMember[];
-}
-
 /** Roster member with persisted Coverage Matrix data (Task 36). */
 export interface CoverageMember extends RosterMember {
   /** Subject names this student covers in this squad. */
@@ -165,6 +160,38 @@ export interface JoinedMember {
 export interface JoinResult {
   squad: Squad;
   member: JoinedMember;
+}
+
+// ---- Mentor-fee subscription payments ----
+
+export type PaymentPlan = "1_month" | "6_month";
+export type PaymentMethod = "nagad" | "bkash";
+export type PaymentStatus = "pending" | "approved" | "rejected";
+
+export interface Payment {
+  id: number;
+  student_id: number;
+  plan: PaymentPlan;
+  amount: number;
+  method: PaymentMethod;
+  sender_phone: string;
+  trx_id: string;
+  status: PaymentStatus;
+  created_at: string;
+  reviewed_at: string | null;
+}
+
+export interface AdminPayment extends Payment {
+  student_name: string;
+  student_email: string;
+}
+
+// ---- Better-squad suggestion ----
+
+export interface SquadSuggestion {
+  squadId: number;
+  currentCoverage: number;
+  suggestedCoverage: number;
 }
 
 // ---- Chat ("Squad Notes") ----

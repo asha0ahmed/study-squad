@@ -11,18 +11,22 @@
  */
 
 import type {
+  AdminPayment,
   ApiErrorBody,
-  ConfirmResult,
   InviteResult,
   JoinResult,
   MatchResult,
   Mentor,
   MentorSession,
   MentorSquad,
+  Payment,
+  PaymentMethod,
+  PaymentPlan,
   SavedStudentSubject,
   Squad,
   SquadDetailView,
   SquadMessage,
+  SquadSuggestion,
   Student,
   StudentSession,
   StudentSquadView,
@@ -90,6 +94,29 @@ export function clearSession() {
   if (!isBrowser()) return;
   window.localStorage.removeItem(TOKEN_KEY);
   window.localStorage.removeItem(SESSION_KEY);
+}
+
+// ---- Admin secret storage ----
+// Deliberately separate from the student/mentor session above (different
+// auth mechanism entirely -- a shared secret header, not a JWT) and kept
+// in sessionStorage rather than localStorage so it doesn't linger longer
+// than the admin's current browser tab.
+
+const ADMIN_SECRET_KEY = "study-squad:admin-secret";
+
+export function getAdminSecret(): string | null {
+  if (!isBrowser()) return null;
+  return window.sessionStorage.getItem(ADMIN_SECRET_KEY);
+}
+
+export function setAdminSecret(secret: string) {
+  if (!isBrowser()) return;
+  window.sessionStorage.setItem(ADMIN_SECRET_KEY, secret);
+}
+
+export function clearAdminSecret() {
+  if (!isBrowser()) return;
+  window.sessionStorage.removeItem(ADMIN_SECRET_KEY);
 }
 
 // ---- Core request helper ----
@@ -217,10 +244,6 @@ export function runMatch(studentId: number) {
   return request<MatchResult>(`/students/${studentId}/match`, { method: "POST" });
 }
 
-export function confirmSquadSlot(squadId: number) {
-  return request<ConfirmResult>(`/squads/${squadId}/confirm`, { method: "POST" });
-}
-
 export function createInvite(squadId: number) {
   return request<InviteResult>(`/squads/${squadId}/invite`, { method: "POST" });
 }
@@ -235,6 +258,63 @@ export function getMySquad(studentId: number) {
 
 export function getSquad(squadId: number) {
   return request<SquadDetailView>(`/squads/${squadId}`);
+}
+
+// ---- Mentor-fee subscription payments ----
+
+export interface SubmitPaymentInput {
+  plan: PaymentPlan;
+  method: PaymentMethod;
+  sender_phone: string;
+  trx_id: string;
+}
+
+export function submitPayment(studentId: number, input: SubmitPaymentInput) {
+  return request<Payment>(`/students/${studentId}/payments`, {
+    method: "POST",
+    body: input,
+  });
+}
+
+export function getLatestPayment(studentId: number) {
+  return request<Payment>(`/students/${studentId}/payments/latest`);
+}
+
+export function adminListPayments(secret: string, status?: "pending" | "approved" | "rejected") {
+  const query = status ? `?status=${status}` : "";
+  return request<AdminPayment[]>(`/admin/payments${query}`, {
+    skipAuth: true,
+    adminSecret: secret,
+  });
+}
+
+export function adminApprovePayment(secret: string, paymentId: number) {
+  return request<Payment>(`/admin/payments/${paymentId}/approve`, {
+    method: "PATCH",
+    skipAuth: true,
+    adminSecret: secret,
+  });
+}
+
+export function adminRejectPayment(secret: string, paymentId: number) {
+  return request<Payment>(`/admin/payments/${paymentId}/reject`, {
+    method: "PATCH",
+    skipAuth: true,
+    adminSecret: secret,
+  });
+}
+
+// ---- Better-squad suggestion ----
+
+export function getSuggestedSquad(studentId: number) {
+  return request<{ suggestion: SquadSuggestion | null }>(`/students/${studentId}/suggested-squad`);
+}
+
+export function switchSquad(studentId: number, targetSquadId: number) {
+  return request<{ squad: Squad }>(`/students/${studentId}/switch-squad`, {
+    method: "POST",
+    body: { targetSquadId },
+  });
 }
 
 // ---- Mentor-side ----

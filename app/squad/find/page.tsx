@@ -95,6 +95,10 @@ export default function FindMySquadPage() {
         })),
       });
     } catch (err) {
+      if (err instanceof ApiError && err.status === 402) {
+        router.push("/squad/subscribe");
+        return;
+      }
       setMatchError(err instanceof ApiError ? err.message : "Couldn't run matching. Try again.");
       setState({ phase: "no-squad" });
     }
@@ -167,11 +171,11 @@ export default function FindMySquadPage() {
 
         <div className="mt-8 border border-ink-20 bg-parchment px-5 py-4">
           <p className="marginalia text-ink-70">
-            Confirming your spot and inviting the rest of your squad is the
-            next screen we&apos;ll build.
+            Your squad starts chatting the moment it reaches 4 members —
+            more scholars are being matched in automatically.
           </p>
-          <Link href="/desk" className="mt-3 inline-block text-sm font-semibold text-oxblood underline">
-            Back to Your Desk
+          <Link href="/squad" className="mt-3 inline-block text-sm font-semibold text-oxblood underline">
+            View Your Squad
           </Link>
         </div>
       </div>
